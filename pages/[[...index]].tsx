@@ -1,5 +1,8 @@
+import React, { useEffect, useReducer, useRef, useState } from 'react'
 import Head from 'next/head'
-import { useEffect, useRef, useState } from 'react'
+
+import { Player, Position } from '../lib/types'
+import { usePlayers } from '../lib/usePlayers'
 
 const WORLD_TOP = 0
 const WORLD_BOTTOM = 1000
@@ -15,10 +18,26 @@ const WORLD_CENTER_LEFT = (WORLD_RIGHT + WORLD_LEFT) / 2
 const WORLD_CENTER_TOP = (WORLD_BOTTOM + WORLD_TOP) / 2
 
 export function useClientside() {
-  const [clientside, setClientside] = useState(false)
+  const [clientside, setClientside] = useState({
+    state: 0,
+    userId: '',
+    gameId: '',
+  })
 
   useEffect(() => {
-    setClientside(true)
+    const [gameId, userId] = window.location.pathname.split('/').filter(Boolean)
+    if (gameId && userId) {
+      setClientside({
+        state: 1,
+        userId,
+        gameId,
+      })
+    } else {
+      setClientside({
+        ...clientside,
+        state: 2,
+      })
+    }
   }, [])
   return clientside
 }
@@ -32,8 +51,18 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <main>
-        <h1 className="title">Impostor</h1>
-        {client && <World userId="me" />}
+        <h1 className="title">{client.userId || 'Impostor'}</h1>
+        {client.state === 1 ? (
+          <World {...client} />
+        ) : client.state === 2 ? (
+          <div>
+            <a href="/testgame/me">me player</a>
+            <br />
+            <a href="/testgame/you">you player</a>
+            <br />
+            <a href="/testgame/third">third player</a>
+          </div>
+        ) : null}
       </main>
       <style jsx global>{`
         html,
@@ -97,7 +126,9 @@ export default function Home() {
           background: rgba(255, 0, 0, 0.2);
         }
         .player {
-          position: relative;
+          position: absolute;
+          top: 0;
+          left: 0;
           width: ${PLAYER_SIZE}px;
           height: ${PLAYER_SIZE}px;
           display: flex;
@@ -123,18 +154,6 @@ export default function Home() {
       `}</style>
     </div>
   )
-}
-
-type Position = {
-  top: number
-  left: number
-  rotate: number
-}
-
-type Player = Position & {
-  id: string
-  rotate: number
-  color: string
 }
 
 // function Zoom({ children }) {
@@ -165,20 +184,22 @@ function World({ userId }: { userId: string }) {
   const level =
     ZOOM * Math.min(win.width / WORLD_WIDTH, win.height / WORLD_HEIGHT)
 
-  const [me, setMe] = useState<Player>({
+  const forceUpdate = useReducer((x) => x + 1, 0)[1]
+  const meRef = useRef<Player>({
     id: userId,
-    top: WORLD_CENTER_TOP,
-    left: WORLD_CENTER_LEFT,
+    top: within(WORLD_TOP, WORLD_BOTTOM),
+    left: within(WORLD_LEFT, WORLD_RIGHT),
     rotate: 0,
     color: 'red',
   })
-  const [players] = useState<Player[]>(() => [])
   const [_top, _left] = useDirection()
+  const players = usePlayers(meRef)
 
   // Move myself
   useEffect(() => {
     if (!_top && !_left) return
     let rotate = (Math.atan2(_top, _left) / Math.PI) * 180 + 90
+    const me = meRef.current
     const diff = mod(rotate - me.rotate, 360)
     if (diff > 180) {
       rotate = me.rotate + diff - 360
@@ -189,20 +210,20 @@ function World({ userId }: { userId: string }) {
     // console.log('start effect', _top, _left, effect)
     let timeout = 0
     ;(function animate() {
-      setMe((me) => {
-        if (timeout < 0) {
-          // console.warn('after effect')
-          return me
-        }
-        let top = me.top + _top * PLAYER_SPEED
-        let left = me.left + _left * PLAYER_SPEED
-        if (top < WORLD_TOP) top = WORLD_TOP
-        if (left < WORLD_LEFT) left = WORLD_LEFT
-        if (top + PLAYER_SIZE > WORLD_BOTTOM) top = WORLD_BOTTOM - PLAYER_SIZE
-        if (left + PLAYER_SIZE > WORLD_RIGHT) left = WORLD_RIGHT - PLAYER_SIZE
-        timeout = requestAnimationFrame(animate)
-        return { ...me, rotate, top, left }
-      })
+      const me = meRef.current
+      if (timeout < 0) {
+        // console.warn('after effect')
+        return
+      }
+      timeout = requestAnimationFrame(animate)
+      let top = me.top + _top * PLAYER_SPEED
+      let left = me.left + _left * PLAYER_SPEED
+      if (top < WORLD_TOP) top = WORLD_TOP
+      if (left < WORLD_LEFT) left = WORLD_LEFT
+      if (top + PLAYER_SIZE > WORLD_BOTTOM) top = WORLD_BOTTOM - PLAYER_SIZE
+      if (left + PLAYER_SIZE > WORLD_RIGHT) left = WORLD_RIGHT - PLAYER_SIZE
+      meRef.current = { ...me, rotate, top, left }
+      forceUpdate()
     })()
     return () => {
       cancelAnimationFrame(timeout)
@@ -217,6 +238,7 @@ function World({ userId }: { userId: string }) {
   //     setMe((me) => ({ ...me, top: me.top + top, left: me.left + left }))
   //   }
   // }, [top, left])
+  const me = meRef.current
   return (
     <div>
       <div className="debug">world {level}</div>
@@ -258,20 +280,8 @@ function World({ userId }: { userId: string }) {
   )
 }
 
-function useLoop() {
-  const requestRef = React.useRef()
-  const animate = (time) => {
-    // The 'state' will always be the initial value here
-    requestRef.current = requestAnimationFrame(animate)
-  }
-  useEffect(() => {
-    requestRef.current = requestAnimationFrame(animate)
-    return () => cancelAnimationFrame(requestRef.current)
-  }, [])
-}
-
 function position({ top = 50, left = 50 }: Position) {
-  return `translate(${left}px,${top}px) `
+  return `translate(${left}px,${top}px)`
 }
 
 function useDirection() {
@@ -360,4 +370,7 @@ function useAnimationFrame(callback, deps = []) {
 }
 function mod(n, m) {
   return ((n % m) + m) % m
+}
+function within(min: number, max: number) {
+  return Math.random() * (max - min) + min
 }
